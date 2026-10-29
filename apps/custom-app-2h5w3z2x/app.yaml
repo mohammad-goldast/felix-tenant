@@ -1,0 +1,94 @@
+schema_version: 1
+title: "Felix Tec Tender Scout — Review Dashboard"
+description: "Live view of every tender processed by the Felix Tec Tender Scout &
+  Bid Recommender playbook — title, links, reasoning, Felix score, verdict certainty,
+  status, and reviewer actions."
+icon: analytics-up
+accent_color: "#6b4fbb"
+
+routes:
+  - path: home
+    module: pages/home.js
+    title: "Tender Review"
+    home: true
+
+styles:
+  - styles.css
+
+data:
+  - id: processed
+    label: "Processed Tenders"
+    source: /table/processed
+    produced_by:
+      kind: playbook
+      skill: "Felix Tec Tender Scout & Bid Recommender"
+  - id: decisions
+    label: "Reviewer decisions log"
+    source: /table/decisions
+    produced_by:
+      kind: playbook
+      skill: "Felix Tec Tender Scout & Bid Recommender"
+  - id: tender_notices
+    label: "CanadaBuys notice dates"
+    source: /table/tender_notices
+    produced_by:
+      kind: pipeline
+      pipeline: "Felix Document Fetch & Scoring Pipeline"
+      pipeline_id: "9087"
+  - id: tender_notices_disc
+    label: "CanadaBuys notice dates (discovery)"
+    source: /table/tender_notices_disc
+    produced_by:
+      kind: pipeline
+      pipeline: "Felix Tender Discovery & Triage"
+      pipeline_id: "9084"
+
+writes:
+  - id: decisions
+    label: "Reviewer decisions (approve/reject)"
+    target: /database/decisions
+
+refresh:
+  mode: feature_view
+  seconds: 0
+
+catalogs:
+  - source: processed
+    entity: tender
+    key: tender_id
+    of:
+      tender_title: {role: dimension, label: "Tender title"}
+      solicitation_number: {role: dimension, label: "Solicitation number"}
+      source_site: {role: dimension, label: "Source site"}
+      verdict: {role: dimension, label: "Verdict"}
+      review_status: {role: dimension, label: "Review status"}
+      confidence: {role: measure, label: "Verdict certainty"}
+      felix_bidding_score: {role: measure, label: "Felix score"}
+    dimensions:
+      - {name: verdict, label: "verdict", column: verdict}
+      - {name: review_status, label: "review status", column: review_status}
+      - {name: source_site, label: "source site", column: source_site}
+      - {name: solicitation_number, label: "solicitation number", column: 
+          solicitation_number}
+    measures:
+      - {name: tenders, label: "tenders", expr: {rows: true}, agg: count, adds: 
+          true}
+      - {name: avg_confidence, label: "average verdict certainty", expr: {col: 
+            confidence}, agg: avg, adds: false}
+      - {name: avg_felix_score, label: "average Felix score", expr: {col: 
+            felix_bidding_score}, agg: avg, adds: false}
+  - source: tender_notices
+    entity: notice
+    key: tender_id
+    of:
+      tender_id: {role: dimension, label: "Tender id"}
+      publication_date: {role: time, label: "Publication date"}
+      closing_date: {role: time, label: "Closing date"}
+    dimensions:
+      - {name: published, label: "published", column: publication_date, time: 
+          true}
+      - {name: closing, label: "closing", column: closing_date, time: true}
+    measures:
+      - {name: notices, label: "notices", expr: {rows: true}, agg: count, adds: 
+          true}
+engine: "1.32.0"
