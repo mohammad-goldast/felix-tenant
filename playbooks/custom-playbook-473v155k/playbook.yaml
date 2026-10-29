@@ -1,0 +1,433 @@
+schema_version: 1
+category: Automation
+tags:
+  - tenders
+  - procurement
+  - canadabuys
+  - sap-ariba
+  - bid-recommendation
+  - crm
+title: Felix Tec Tender Scout & Bid Recommender
+description: Find newly-posted tenders from CanadaBuys (and optionally SAP 
+  Ariba), triage them against FelixTec's knowledge base, pull the full bid 
+  documents for the top candidates, score fit and win chance, and recommend pass
+  / fail / human-review with confidence and justification. Every tender is named
+  by its CanadaBuys friendly title. Maintains one persistent Tender Review 
+  Status artifact (same identity every run) with an admin review_status field 
+  (approved/declined/triaged-out) that an external app can act on; every fetched
+  tender is written to that store, including those dropped at triage; approved 
+  human_review tenders get pushed to SharePoint automatically. Preps a Felix 
+  CRM-ready tenders table and per-tender SharePoint document bundles 
+  (batch-pushed only in 'push' mode).
+icon: analytics-up
+accent_color: '#6b4fbb'
+example: Find CanadaBuys tenders posted since 2026-06-01, only "Goods" type, 
+  keep the top 20% via triage, use standard review depth with GPT-4o as 
+  adversarial QA, and dry-run the CRM push.
+required_inputs:
+  - Start date
+  - Sites to search
+  - Triage keep %
+  - Review depth
+  - CRM operation mode
+connector_requirements:
+  - id: felix_crm
+    label: Felix Dynamics 365 CRM
+    origin_includes: crm3.dynamics.com
+    reason: Reads the new_tender ("Tenders") entity schema (every run; not 
+      opportunity -- no write privilege; not new_project -- the separate won-bid
+      delivery tracker) and pushes passed tenders when CRM operation mode is 
+      'push'.
+steps:
+  - Load the Tender Review Status store (persistent, one identity across all 
+    runs)
+  - Act on any admin-approved/declined tenders since the last run (approved => 
+    push to SharePoint now)
+  - Fetch new tender listings from the selected sites since the start date, 
+    excluding already-processed, capturing each tender's CanadaBuys friendly 
+    title
+  - Triage via felix-tender-listing-triage (hard filters, then top X% of 
+    eligible)
+  - Pull full documents & amendments for the triage candidates
+  - Score via felix-tender-deep-scoring — pass / fail / human_review with 
+    separate confidence and felix_bidding_score
+  - Build the Felix CRM-ready tenders table (push if CRM mode is push)
+  - Build per-tender document bundles (push to SharePoint if CRM mode is push)
+  - Record everything — new scores, triaged-out tenders, and admin actions — 
+    back into the one persistent status store
+  - Deliver the final report + passed/failed/review tables + 
+    pending-review/admin-action summary
+final_output: A final report with passed/failed/human-review tender tables 
+  (named by title), a CRM-ready tenders table (pushed or dry-run), per-tender 
+  document bundles, admin decisions applied this run, and the updated persistent
+  Tender Review Status store
+fields:
+  - key: startDate
+    label: Start date
+    type: text
+    required: true
+    description: Only include tenders opened, posted, or amended on or after 
+      this date.
+    placeholder: e.g. 2026-06-01
+  - key: maxTenders
+    label: Max number of tenders (optional)
+    type: text
+    description: Cap on how many new tenders to process. Leave blank to process 
+      ALL new tenders found since the start date.
+    placeholder: e.g. 50 (blank = all)
+  - key: tenderFilters
+    label: Tender filters (plain text)
+    type: textarea
+    description: Plain-language filters on the tenders to consider — type, 
+      category, keywords, value range, region, etc.
+    placeholder: e.g. only "Goods" type tenders, exclude construction
+  - key: sitesToSearch
+    label: Sites to search
+    type: multiselect
+    required: true
+    description: Which tender sources to search. CanadaBuys is required; SAP 
+      Ariba is optional and pulls bidding materials by tender/event ID.
+    options:
+      - value: canadabuys
+        label: CanadaBuys (required)
+      - value: sap_ariba
+        label: SAP Ariba supplier portal (optional)
+    default_values:
+      - canadabuys
+  - key: triageKeepPct
+    label: Triage keep %
+    type: text
+    required: true
+    description: The top X% of eligible new tenders (after listing-triage hard 
+      filters for expired, inactive, and fewer than 7 days remaining) that 
+      advance to full document review and scoring.
+    default_value: '20'
+    placeholder: e.g. 20
+  - key: qaModel
+    label: Adversarial / QA model (optional)
+    type: text
+    description: An extra model or Custom API name used to challenge the scoring
+      for accuracy. Leave blank to use the Corvic default judge only.
+    placeholder: leave blank for Corvic default, or e.g. gpt-4o, a named Custom 
+      API
+  - key: reviewDepth
+    label: Mode of review
+    type: select
+    required: true
+    description: How much QA/adversarial re-checking to apply to the scoring.
+    options:
+      - value: fast
+        label: Fast (single-pass scoring, no adversarial re-check)
+      - value: standard
+        label: Standard (adversarial re-check on borderline/passed tenders)
+      - value: thorough
+        label: Thorough (adversarial re-check on every tender, escalate 
+          disagreements)
+    default_value: standard
+  - key: crmMode
+    label: Mode of CRM operation
+    type: select
+    required: true
+    description: 'Dry-run: build the CRM-ready table and document bundles but push
+      nothing. Push: also write to Dynamics 365 CRM and upload bundles to SharePoint
+      for this run''s fresh pass tenders.'
+    options:
+      - value: dry-run
+        label: Dry-run (build only, push nothing)
+      - value: push
+        label: Push (write to CRM + SharePoint)
+    default_value: dry-run
+message_template: |-
+  Scout and score tenders for Felix Tec.
+
+  Start date: {{startDate}}{{#maxTenders}}
+  Max number of tenders: {{maxTenders}}{{/maxTenders}}{{#tenderFilters}}
+  Tender filters: {{tenderFilters}}{{/tenderFilters}}
+  Sites to search: {{sitesToSearch}}
+  Triage keep %: {{triageKeepPct}}{{#qaModel}}
+  Adversarial / QA model: {{qaModel}}{{/qaModel}}
+  Mode of review: {{reviewDepth}}
+  Mode of CRM operation: {{crmMode}}
+
+  First act on any admin-approved/declined tenders sitting in the persistent Tender Review Status store since the last run (approved => push that tender's documents to SharePoint now). Then exclude tenders already in that store from new fetching. Load and follow felix-tender-listing-triage (hard filters, then top {{triageKeepPct}}% of eligible) before pulling full documents. Load and follow felix-tender-deep-scoring to assign pass / fail / human_review with separate confidence and felix_bidding_score, grounded in the tender's own documents and the FelixTec knowledge base, naming every tender by its CanadaBuys friendly title. Build the Felix CRM-ready table every run; only batch-write to CRM/SharePoint if CRM mode is 'push'. Record every fetched tender (scored survivors and those dropped at triage as review_status triaged-out, with the triage score in justification) and every admin action back into the one persistent status store (same identity every run). Never fabricate a score, justification or document.
+plan:
+  - id: load_processed
+    label: Load the Tender Review Status store
+    produces:
+      - data.processed_list
+    details: Resolves the persistent 'Already Processed Tender List' artifact 
+      (same identity every run — via Scheduler context history on a scheduled 
+      run, or by searching the room feature-views table for a prior run's 
+      artifact) and loads its full contents (tender id, title, source site, 
+      date_first_seen, date_last_updated, publication_date, closing_date, 
+      verdict, confidence, felix_bidding_score, justification, key_facts, 
+      fit_rationale, admin_note, review_status, crm_pushed, sharepoint_pushed, 
+      crm_link, sharepoint_link, decided_by/at). If those extra columns are 
+      missing, add them as null on the same identity — never fork. Treats it as 
+      empty only on a genuine first-ever run. Produces data.processed_list.
+    tools:
+      - execute_sql
+      - preview_feature_view
+      - get_environment
+  - id: process_admin_decisions
+    label: Act on pending admin decisions
+    depends_on:
+      - load_processed
+    produces:
+      - data.admin_actions_applied
+    details: From data.processed_list, finds rows whose review_status is 
+      'approved' or 'declined' but not yet acted on. For 'approved' rows, pushes
+      that tender's documents to SharePoint now (checking Microsoft Graph 
+      connector, reusing or re-fetching the tender's documents, creating or 
+      reusing the tender's folder -- named after the tender's CRM/friendly title
+      (tender_title), never its bare tender id -- in the Tender document library
+      on the MS Dynamics 365 site -- not the root Communication site's default 
+      Documents library, see the site/drive and folder-naming note in the 
+      tender_bundles step -- uploading, resolving that folder's webUrl via Graph
+      and recording it as sharepoint_link, recording the outcome) regardless of 
+      this run's CRM mode — the admin approval is its own push clearance. For 
+      'declined' rows, marks them finalized with no push. Produces 
+      data.admin_actions_applied, merged into the status store later in 
+      update_processed_list (not written separately).
+    tools:
+      - execute_sql
+      - execute_python
+      - ariba-tender-downloader-v3
+  - id: fetch_tenders
+    label: Fetch new tender listings
+    depends_on:
+      - load_processed
+    produces:
+      - data.new_tenders
+    details: Fetches tenders opened/posted/amended on or after the start date 
+      from the selected sites (CanadaBuys via execute_python + requests / 
+      web_search; SAP Ariba search mode via the ariba-tender-downloader-v3 skill
+      when selected), applies the plain-text filters and the max-tenders cap, 
+      and excludes any tender id already in data.processed_list. Collects 
+      high-level fields per tender including the required CanadaBuys friendly 
+      title (tender_title) plus category, organization, publication_date and 
+      closing_date under those exact names (CanadaBuys 
+      publicationDate-datePublication and 
+      tenderClosingDate-appelOffresDateCloture, keep the source ISO string), 
+      amendment dates, summarized description, conditions/requirements, duration
+      — without loading documents yet. Produces data.new_tenders.
+    tools:
+      - execute_python
+      - web_search
+      - execute_sql
+  - id: triage
+    label: Triage against the FelixTec knowledge base
+    depends_on:
+      - fetch_tenders
+    produces:
+      - data.triage_all
+      - data.triage_candidates
+      - data.triaged_out
+    details: Nested skill required — load and follow felix-tender-listing-triage
+      (listing only, no documents). That skill applies hard filters (EXPIRED, 
+      INACTIVE, TOO_SOON, DUPLICATE_VARIANT), scores listing fit 0-100 on every 
+      new tender, and keeps the top Triage keep % of the eligible pool only. 
+      Missing closing_date stays eligible. 100% keep still drops hard-filtered 
+      rows. Produces data.triage_all (every fetched notice with reason code), 
+      data.triage_candidates (kept), and data.triaged_out (not kept, including 
+      TOO_SOON / EXPIRED / INACTIVE / DUPLICATE_VARIANT / BELOW_KEEP, each with 
+      tender_id, tender_title, source_site, publication_date, closing_date, 
+      fit_score 0-100, and fit_rationale).
+    tools:
+      - use_skill
+      - ask_memory
+      - knowledge_graph_search
+      - list_memories
+      - execute_sql
+  - id: fetch_documents
+    label: Pull full documents & amendments for the candidates
+    depends_on:
+      - triage
+    produces:
+      - data.tender_documents
+    details: For every triage candidate, downloads its complete set of bidding 
+      documents and amendments into a file table tagged by tender id, tender 
+      title, and source site — CanadaBuys attachments via execute_python + 
+      requests, and SAP Ariba attachments via the ariba-tender-downloader-v3 
+      skill direct-by-ID path (read-only retrieval only) when the tender is on 
+      SAP Ariba. Records why against any tender whose documents can't be 
+      retrieved. Produces data.tender_documents.
+    tools:
+      - execute_python
+      - ariba-tender-downloader-v3
+      - extract_tables
+  - id: analyze_score
+    label: Digitize, analyze and score each candidate
+    depends_on:
+      - fetch_documents
+    produces:
+      - data.scored_tenders
+    details: Nested skill required — load and follow felix-tender-deep-scoring. 
+      That skill digitizes (nested pdf-processing before scoring PDFs) and 
+      assigns pass / fail / human_review with two independent scores (confidence
+      = certainty of the verdict, felix_bidding_score = attractiveness, never 
+      copied from each other). History is a signal capped at 10 of 100, not the 
+      foundation. Never pass without a substantive solicitation document. 
+      Applies review-depth QA (fast/standard/thorough) and records original vs 
+      adjusted reasoning. Sets review_status from the verdict. Produces 
+      data.scored_tenders (one row per candidate, including missing-docs rows) 
+      with tender_title, verdict, confidence, felix_bidding_score, 
+      justification, key_facts, review_status, docs_available, qa_note.
+    tools:
+      - use_skill
+      - extract_tables
+      - execute_python
+      - read_images
+      - ask_memory
+      - list_memories
+      - knowledge_graph_search
+      - execute_sql
+  - id: crm_prep
+    label: Build the Felix CRM-ready tenders table
+    depends_on:
+      - analyze_score
+    produces:
+      - data.crm_ready
+      - delivery.crm_pushed
+    details: Reads the Felix Dynamics 365 CRM new_tender ("Tenders") entity 
+      schema via the Felix Dynamics 365 CRM Custom API -- not opportunity (no 
+      write privilege) and not new_project (the separate won-bid delivery 
+      tracker) -- and shapes this run's pass-verdict tenders into a table 
+      matching that schema, mapping Solicitation Name (new_name) from 
+      tender_title, Solicitation Number (new_solisietionnumber), Issue Date 
+      (new_issuedate), Closing Date and Time (new_closingdatetime), Time Zone 
+      (new_timezone, picklist), Tender URL (new_tenderurl), Organization 
+      (new_organization, picklist -- FelixTec's own bidding org), Tender Origin 
+      (new_tenderorigin, picklist), Client (new_client, lookup to the matching 
+      account by end-user name), and SharePoint URL (new_sharepointurl). 
+      Check-before-create (important -- learned the hard way, a retried push 
+      once created two duplicate new_tender records for the same tender) -- 
+      before writing any row in push mode, query for an existing record for that
+      tender first using GET .../new_tenders?$filter=new_solisietionnumber eq 
+      '<solicitation number>' (falling back to new_name eq '<tender_title>' if 
+      the solicitation number is blank/unreliable), then branch on the result --
+      no match, then create via POST; exactly one match, then update that record
+      via PATCH instead of creating a second one (this also makes a retried push
+      idempotent); more than one match, then duplicates already exist -- keep 
+      the earliest-createdon record as canonical, PATCH it, and report the extra
+      duplicate id(s) in the final report for the user to confirm before 
+      hard-deleting via DELETE. Writes the rows to the CRM via its Web API only 
+      when CRM operation mode is 'push' (binding the Client lookup via 
+      new_Client@odata.bind, recording the created/updated new_tenderid and 
+      building each one's crm_link from that id with etn=new_tender); otherwise 
+      shows what would be pushed and skips even the duplicate-check read. Never 
+      includes fail/human_review tenders. Produces data.crm_ready and 
+      delivery.crm_pushed (with crm_link).
+    tools:
+      - execute_python
+  - id: tender_bundles
+    label: Build per-tender document bundles
+    depends_on:
+      - analyze_score
+    produces:
+      - artifact.tender_bundles
+      - delivery.sharepoint_pushed
+    details: Assembles a document bundle per this run's pass-verdict tender from
+      data.tender_documents (labelled by tender title) and publishes it as a 
+      durable artifact. SharePoint destination (important, corrected 2026-08-29)
+      -- FelixTec's tender documents belong in the Tender document library on 
+      the MS Dynamics 365 SharePoint site (site 
+      https://felixtecca.sharepoint.com/sites/MSDynamics365, drive name Tender, 
+      webUrl .../sites/MSDynamics365/new_tender), NOT the root Communication 
+      site's default Documents library (https://felixtecca.sharepoint.com/Shared
+      Documents), even though that root library can contain a folder literally 
+      named MSDynamics365 -- resolve the Tender library's drive id via GET 
+      /sites/<MS Dynamics 365 site id>/drives and match name == Tender, never 
+      assume a cached drive id. Folder naming (important, corrected 2026-08-29) 
+      -- name every SharePoint folder after the tender's CRM/friendly title 
+      (tender_title, the same value written to new_name in crm_prep), never its 
+      bare tender id; sanitize illegal SharePoint path characters but keep it 
+      readable. Dynamics 365 itself auto-creates an empty folder named after 
+      new_name the instant a new_tender record is created, so when crm_prep has 
+      already created that tender's new_tender record, check for and reuse that 
+      already-existing same-named folder rather than creating a duplicate; only 
+      create a new folder by that name when none exists yet. When CRM operation 
+      mode is 'push', creates (or reuses) a folder named after the tender's 
+      CRM/friendly title under that Tender library's <current year> Tenders path
+      via the Microsoft Graph Custom API and uploads the tender's documents into
+      it (checking the connector first and reporting a gap if missing), then 
+      resolves that folder's webUrl via a Graph GET on the folder path and 
+      records it as sharepoint_link; in dry-run, builds and reports the bundle 
+      only, leaving sharepoint_link none (dry-run). This batch path never 
+      touches human_review/pending_review tenders. Produces 
+      artifact.tender_bundles and delivery.sharepoint_pushed (with 
+      sharepoint_link).
+    tools:
+      - execute_python
+      - edit_text_files
+      - allocate_artifact
+      - write_artifact
+  - id: update_processed_list
+    label: Record new scores and admin actions back to the status store
+    depends_on:
+      - crm_prep
+      - tender_bundles
+      - process_admin_decisions
+      - triage
+    produces:
+      - data.processed_list_updated
+    details: Merges data.processed_list (Step load_processed), 
+      data.admin_actions_applied (Step process_admin_decisions), every tender in
+      data.scored_tenders from this run (with its review_status, 
+      crm_pushed/sharepoint_pushed outcomes, and their 
+      crm_link/sharepoint_link), AND every tender in data.triaged_out / any 
+      data.new_tenders id not already in the store, into the one persistent 
+      Tender Review Status store. New rows copy publication_date and 
+      closing_date from data.new_tenders (null if missing). Scored rows copy 
+      felix_bidding_score when present (else null); triaged-out rows leave it 
+      null. Triaged-out rows use the same schema — review_status=triaged-out, 
+      verdict=fail, confidence=triage fit score, justification includes that 
+      score and the listing-triage reason code (e.g. 'Triage score 42/100. 
+      Reason BELOW_KEEP. Ranked below the keep threshold; not sent to full 
+      document review. {fit_rationale}'), crm/sharepoint fields=none, 
+      admin_note=null. Never overwrite an existing row for the same tender_id. 
+      Never overwrite a non-empty admin_note. Never replace a filled 
+      publication_date or closing_date with null. Publishes it back to the same 
+      artifact identity resolved in load_processed (same run_key/artifact_name, 
+      never a new one) so future runs skip these ids. Produces 
+      data.processed_list_updated.
+    tools:
+      - execute_sql
+      - allocate_artifact
+      - write_artifact
+  - id: final_report
+    label: Deliver the final report
+    depends_on:
+      - update_processed_list
+    produces:
+      - artifact.report
+    details: Runs the completeness self-check, then builds and publishes the 
+      final report naming admin decisions applied this run and what was pushed 
+      as a result, counts at each stage (including how many were recorded as 
+      triaged-out with their triage scores), the full passed/failed/human_review
+      tables (by tender title) with confidence, felix_bidding_score, and 
+      justification, how many tenders now sit in pending_review, what was pushed
+      (or would be pushed) to CRM and SharePoint with the actual 
+      crm_link/sharepoint_link for each, and links to the document bundles. 
+      Produces artifact.report.
+    tools:
+      - execute_python
+      - edit_text_files
+      - allocate_artifact
+      - write_artifact
+required_outputs:
+  - data.admin_actions_applied
+  - data.new_tenders
+  - data.triage_all
+  - data.triage_candidates
+  - data.triaged_out
+  - data.scored_tenders
+  - data.crm_ready
+  - artifact.tender_bundles
+  - data.processed_list_updated
+  - artifact.report
+github:
+  owner: mohammad-goldast
+  repo: felix-tenant
+  branch: dev
+  path: playbooks/custom-playbook-473v155k
