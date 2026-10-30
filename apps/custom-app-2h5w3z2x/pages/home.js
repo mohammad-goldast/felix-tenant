@@ -124,12 +124,10 @@ function statusInfo(row) {
   const pushState = row.latest_push_status; // 'pending' | 'done' | 'failed' | null
   if (kind === "approved") {
     if (pushState === "pending") return { label: "Approved — sending…", cls: "pending" };
-    if (pushState === "failed") return { label: "Approved — send failed", cls: "failed" };
     return { label: "Approved", cls: "approved" };
   }
   if (kind === "declined") {
     if (pushState === "pending") return { label: "Declined — updating Felix…", cls: "pending" };
-    if (pushState === "failed") return { label: "Declined — send failed", cls: "failed" };
     return { label: "Declined", cls: "declined" };
   }
   if (kind === "auto_approved") return { label: "Auto-Approved", cls: "approved" };
