@@ -313,27 +313,18 @@ async function loadRows(db) {
       p.tender_id, p.tender_title, p.source_site, p.date_first_seen, p.date_last_updated,
       p.verdict, p.confidence, p.felix_bidding_score, p.justification, p.review_status,
       p.decided_by, p.decided_at, p.crm_pushed, p.sharepoint_pushed, p.crm_link, p.sharepoint_link,
-      COALESCE(NULLIF(TRIM(CAST(p.solicitation_number AS VARCHAR)), ''), CAST(n.solicitation_number AS VARCHAR)) AS solicitation_number,
-      COALESCE(CAST(n.publication_date AS VARCHAR), CAST(p.publication_date AS VARCHAR)) AS publication_date,
-      COALESCE(CAST(n.closing_date AS VARCHAR), CAST(p.closing_date AS VARCHAR)) AS closing_date,
+      NULLIF(TRIM(CAST(p.solicitation_number AS VARCHAR)), '') AS solicitation_number,
+      CAST(p.publication_date AS VARCHAR) AS publication_date,
+      CAST(p.closing_date AS VARCHAR) AS closing_date,
       CASE
-        WHEN COALESCE(CAST(n.closing_date AS VARCHAR), CAST(p.closing_date AS VARCHAR), '') = '' THEN NULL
-        ELSE date_diff('day', CURRENT_DATE, CAST(TRY_CAST(COALESCE(CAST(n.closing_date AS VARCHAR), CAST(p.closing_date AS VARCHAR)) AS TIMESTAMP) AS DATE))
+        WHEN COALESCE(CAST(p.closing_date AS VARCHAR), '') = '' THEN NULL
+        ELSE date_diff('day', CURRENT_DATE, CAST(TRY_CAST(CAST(p.closing_date AS VARCHAR) AS TIMESTAMP) AS DATE))
       END AS days_remaining,
       d.action AS latest_action, d.decided_by AS latest_decided_by, d.decided_at AS latest_decided_at,
       d.status AS latest_push_status, d.crm_link AS latest_crm_link,
       d.sharepoint_link AS latest_sharepoint_link, d.note AS latest_note,
       hist.all_notes AS all_notes
     FROM processed p
-    LEFT JOIN (
-      SELECT tender_id, publication_date, closing_date, solicitation_number
-      FROM (
-        SELECT tender_id, publication_date, closing_date, solicitation_number FROM tender_notices
-        UNION ALL
-        SELECT tender_id, publication_date, closing_date, solicitation_number FROM tender_notices_disc
-        WHERE tender_id NOT IN (SELECT tender_id FROM tender_notices)
-      ) dates
-    ) n ON n.tender_id = p.tender_id
     LEFT JOIN (
       SELECT tender_id, action, decided_by, decided_at, status, crm_link, sharepoint_link, note
       FROM (

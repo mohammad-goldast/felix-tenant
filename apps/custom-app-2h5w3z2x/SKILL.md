@@ -1,5 +1,5 @@
 ---
-name: custom-app-2h5w3z2x
+name: custom-app-2h5w3z2x-v2
 description: "A blank live-web-app scaffold to build FROM SCRATCH by editing its OWN\
   \ bundle files in place. Use when the user starts a new app from nothing and describes\
   \ what they want it to show and which data to use. Follow the live-app-builder skill\
